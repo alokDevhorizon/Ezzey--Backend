@@ -1,25 +1,15 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const crypto = require('crypto');
 
-// Create transporter using Gmail SMTP
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.GOOGLE_EMAIL,
-    pass: process.env.GOOGLE_APP_PASSWORD,
-  },
-});
+// Initialize Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Test the connection
-transporter.verify((error, success) => {
-  if (error) {
-    console.log('❌ Email service error:', error);
-  } else {
-    console.log('✅ Email service ready');
-  }
-});
+// Check if Resend is properly initialized
+if (process.env.RESEND_API_KEY) {
+  console.log('✅ Email service (Resend) ready');
+} else {
+  console.log('❌ Email service error: RESEND_API_KEY not found in environment variables');
+}
 
 // Generate verification token
 const generateVerificationToken = () => {
@@ -32,8 +22,8 @@ const sendVerificationEmail = async (email, verificationToken, userName) => {
     const baseUrl = process.env.BACKEND_URL || 'http://localhost:5000';
     const verificationUrl = `${baseUrl}/auth/verify-email?token=${verificationToken}`;
 
-    const mailOptions = {
-      from: `"Ezzey" <${process.env.GOOGLE_EMAIL}>`,
+    const { data, error } = await resend.emails.send({
+      from: `Ezzey <onboarding@resend.dev>`,
       to: email,
       subject: 'Verify Your Email Address - Ezzey',
       html: `
@@ -65,10 +55,14 @@ const sendVerificationEmail = async (email, verificationToken, userName) => {
           </div>
         </div>
       `,
-    };
+    });
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('✅ Verification email sent:', info.response);
+    if (error) {
+      console.error('❌ Error sending verification email:', error);
+      throw error;
+    }
+
+    console.log('✅ Verification email sent:', data);
     return true;
   } catch (error) {
     console.error('❌ Error sending verification email:', error);
@@ -120,5 +114,4 @@ module.exports = {
   generateVerificationToken,
   sendVerificationEmail,
   sendPasswordResetEmail,
-  transporter,
 };
