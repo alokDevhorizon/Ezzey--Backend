@@ -27,7 +27,8 @@ const generateVerificationToken = () => {
 // Send verification email
 const sendVerificationEmail = async (email, verificationToken, userName) => {
   try {
-    const verificationUrl = `http://localhost:5000/auth/verify-email?token=${verificationToken}`;
+    const baseUrl = process.env.BACKEND_URL || 'http://localhost:5000';
+    const verificationUrl = `${baseUrl}/auth/verify-email?token=${verificationToken}`;
 
     const mailOptions = {
       from: `"Ezzey" <${process.env.GOOGLE_EMAIL}>`,
