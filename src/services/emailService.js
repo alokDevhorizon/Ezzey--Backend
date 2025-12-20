@@ -2,10 +2,10 @@ const { Resend } = require('resend');
 const crypto = require('crypto');
 
 // Initialize Resend
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
 // Check if Resend is properly initialized
-if (process.env.RESEND_API_KEY) {
+if (resend && process.env.RESEND_API_KEY) {
   console.log('✅ Email service (Resend) ready');
 } else {
   console.log('❌ Email service error: RESEND_API_KEY not found in environment variables');

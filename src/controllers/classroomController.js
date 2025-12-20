@@ -1,4 +1,5 @@
 const Classroom = require('../models/Classroom');
+const XLSX = require('xlsx');
 
 // @desc    Create a classroom
 // @route   POST /classrooms
@@ -10,6 +11,135 @@ exports.createClassroom = async (req, res, next) => {
       success: true,
       message: 'Classroom created successfully',
       data: classroom,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Bulk upload classrooms from CSV/Excel
+// @route   POST /classrooms/bulk-upload
+// @access  Private/Admin
+exports.bulkUploadClassrooms = async (req, res, next) => {
+  try {
+    // Check if file is provided
+    if (!req.files || !req.files.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a file',
+      });
+    }
+
+    const file = req.files.file;
+    const allowedMimeTypes = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv',
+    ];
+
+    // Validate file type
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a valid CSV or Excel file',
+      });
+    }
+
+    let data = [];
+
+    // Parse Excel/CSV file
+    if (file.mimetype === 'text/csv') {
+      // For CSV files
+      const XLSX_CSV = require('xlsx');
+      const workbook = XLSX_CSV.read(file.data, { type: 'buffer' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      data = XLSX_CSV.utils.sheet_to_json(worksheet);
+    } else {
+      // For Excel files
+      const workbook = XLSX.read(file.data, { type: 'buffer' });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      data = XLSX.utils.sheet_to_json(worksheet);
+    }
+
+    if (!data || data.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'File is empty or has no valid data',
+      });
+    }
+
+    // Validate and process data
+    const results = {
+      successful: [],
+      failed: [],
+    };
+
+    for (let i = 0; i < data.length; i++) {
+      try {
+        const row = data[i];
+
+        // Validate required fields
+        if (!row.name || !row.capacity) {
+          results.failed.push({
+            row: i + 2, // +2 because row 1 is header, array starts at 0
+            reason: 'Missing required fields (name, capacity)',
+            data: row,
+          });
+          continue;
+        }
+
+        // Validate capacity is a number
+        const capacity = Number(row.capacity);
+        if (isNaN(capacity) || capacity < 1) {
+          results.failed.push({
+            row: i + 2,
+            reason: 'Capacity must be a valid number greater than 0',
+            data: row,
+          });
+          continue;
+        }
+
+        // Validate type if provided
+        const validTypes = ['lecture', 'lab', 'seminar'];
+        const type = row.type?.toLowerCase() || 'lecture';
+        if (!validTypes.includes(type)) {
+          results.failed.push({
+            row: i + 2,
+            reason: `Type must be one of: ${validTypes.join(', ')}`,
+            data: row,
+          });
+          continue;
+        }
+
+        // Create classroom
+        const classroomData = {
+          name: row.name.trim(),
+          capacity: capacity,
+          type: type,
+        };
+
+        const classroom = await Classroom.create(classroomData);
+        results.successful.push({
+          row: i + 2,
+          id: classroom._id,
+          name: classroom.name,
+        });
+      } catch (error) {
+        // Handle duplicate key or other database errors
+        results.failed.push({
+          row: i + 2,
+          reason: error.message.includes('duplicate key')
+            ? 'Classroom name already exists'
+            : error.message,
+          data: data[i],
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Bulk upload completed: ${results.successful.length} successful, ${results.failed.length} failed`,
+      data: results,
     });
   } catch (error) {
     next(error);

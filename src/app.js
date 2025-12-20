@@ -4,6 +4,7 @@ require('express-async-errors');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const fileUpload = require('express-fileupload');
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -40,6 +41,12 @@ app.options('*', cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(cookieParser());
+
+// File upload middleware
+app.use(fileUpload({
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max file size
+  abortOnLimit: true,
+}));
 
 // ========================================================
 //  OPTIONAL — SAFEST SECURITY HEADERS (NO CORS LOGIC HERE)
