@@ -1,0 +1,13 @@
+code,name,department,hoursPerWeek,type,isElective
+CS101,Data Structures,Computer Science,4,theory,false
+CS102,Web Development Fundamentals,Computer Science,3,lab,false
+CS103,Artificial Intelligence Basics,Computer Science,3,theory,true
+CS104,Database Management Systems,Computer Science,4,lab,false
+CS105,Computer Networks,Computer Science,3,theory,false
+CS106,Advanced OOP,Computer Science,4,lab,true
+CS107,Security Fundamentals,Computer Science,2,seminar,true
+CS108,Mobile App Development,Computer Science,3,practical,true
+IT201,Operating Systems,Information Technology,4,theory,false
+IT202,Software Engineering,Information Technology,3,seminar,false
+IT203,Cloud Computing,Information Technology,3,practical,true
+IT204,DevOps Essentials,Information Technology,2,lab,true
