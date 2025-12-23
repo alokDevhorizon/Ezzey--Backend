@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const { generateVerificationToken, sendVerificationEmail } = require('../services/emailService');
+const crypto = require('crypto');
+const { generateVerificationToken, sendVerificationEmail, sendPasswordResetEmail } = require('../services/emailService');
+
 
 
 // Generate JWT Token
@@ -279,6 +281,128 @@ exports.resendVerificationEmail = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Verification email resent successfully. Please check your inbox.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+// ------------------------------------
+// FORGOT PASSWORD
+// ------------------------------------
+exports.forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an email',
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found with this email',
+      });
+    }
+
+    // Generate password reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    user.passwordResetToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+    user.passwordResetExpires = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour
+    await user.save();
+
+    // Send password reset email
+    try {
+      await sendPasswordResetEmail(email, resetToken, user.name);
+    } catch (emailError) {
+      // Clear the reset token if email fails
+      user.passwordResetToken = null;
+      user.passwordResetExpires = null;
+      await user.save();
+
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send password reset email. Please try again.',
+      });
+    }
+
+    console.log('✅ Password reset email sent for user:', email);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset email sent successfully. Please check your inbox.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ------------------------------------
+// RESET PASSWORD
+// ------------------------------------
+exports.resetPassword = async (req, res, next) => {
+  try {
+    const { token, newPassword, confirmPassword } = req.body;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token is required',
+      });
+    }
+
+    if (!newPassword || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide new password and confirmation password',
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match',
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long',
+      });
+    }
+
+    // Hash the token to match it with the database
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Find user with the reset token and check if it hasn't expired
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token',
+      });
+    }
+
+    // Update password and clear the reset token
+    user.password = newPassword;
+    user.passwordResetToken = null;
+    user.passwordResetExpires = null;
+    await user.save();
+
+    console.log('✅ Password reset successfully for user:', user.email);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password reset successfully. You can now log in with your new password.',
     });
   } catch (error) {
     next(error);
