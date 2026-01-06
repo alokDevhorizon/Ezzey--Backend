@@ -40,10 +40,10 @@ const getBusySlots = async () => {
 
   existingSchedules.forEach(schedule => {
     if (!schedule.weekSlots) return;
-    
+
     schedule.weekSlots.forEach(slot => {
       const timeKey = `${slot.day}-${slot.startTime}`;
-      
+
       // Mark Faculty as busy
       if (slot.faculty) {
         const fid = slot.faculty.toString();
@@ -89,7 +89,18 @@ const generateTimetable = async (batch) => {
   // 1. FETCH RESOURCES & BUSY SLOTS
   // ---------------------------------------------------------
   const busySlots = await getBusySlots();
-  console.log(`📡 Global Awareness: Found occupied slots from ${Object.keys(busySlots.faculty).length} faculty members.`);
+
+  // Calculate total hours needed
+  const totalHoursNeeded = batch.subjects.reduce((sum, s) => sum + (s.subject?.hoursPerWeek || 0), 0);
+  const totalAvailableSlots = days.length * timeSlots.length;
+
+  console.log(`🚀 Generating Timetable for: ${batch.name} (Size: ${batch.strength})`);
+  console.log(`📊 Statistics: Subjects: ${batch.subjects.length}, Total Hours: ${totalHoursNeeded}, Max Possible: ${totalAvailableSlots}`);
+
+  if (totalHoursNeeded > totalAvailableSlots) {
+    console.error(`❌ CRITICAL: Total hours requested (${totalHoursNeeded}) exceeds weekly capacity (${totalAvailableSlots})!`);
+    return [];
+  }
 
   const allClassrooms = await Classroom.find({ isActive: true });
   allClassrooms.sort((a, b) => b.capacity - a.capacity);
@@ -104,16 +115,16 @@ const generateTimetable = async (batch) => {
     opType: 'min',
     constraints: {},
     variables: {},
-    ints: {} 
+    ints: {}
   };
 
-  const variableMap = {}; 
+  const variableMap = {};
 
   // 3. BUILD CONSTRAINTS
   // ---------------------------------------------------------
   for (const subjectEntry of batch.subjects) {
     const { subject, faculty } = subjectEntry;
-    
+
     if (!subject || !faculty) continue;
 
     const hoursNeeded = subject.hoursPerWeek || 3;
@@ -132,7 +143,7 @@ const generateTimetable = async (batch) => {
     if (suitableRooms.length === 0) {
       if (roomPool.length > 0) {
         console.warn(`⚠️ Warning: No room fits ${batch.strength} students for ${subject.name}. Using largest available.`);
-        suitableRooms = [roomPool[0]]; 
+        suitableRooms = [roomPool[0]];
       } else {
         console.error(`❌ CRITICAL: No rooms of type ${subject.type} available!`);
         continue;
@@ -155,44 +166,44 @@ const generateTimetable = async (batch) => {
         // 🛑 GLOBAL CONFLICT CHECK 🛑
         // We must check EVERY hour in the proposed block for conflicts
         let isBlocked = false;
-        
-        for (let i = 0; i < blockDuration; i++) {
-            const checkSlot = timeSlots[t + i];
-            const timeKey = `${day}-${checkSlot.start}`;
 
-            // Check if Faculty is busy elsewhere
-            if (busySlots.faculty[facId]?.includes(timeKey)) {
-                isBlocked = true;
-                break;
-            }
+        for (let i = 0; i < blockDuration; i++) {
+          const checkSlot = timeSlots[t + i];
+          const timeKey = `${day}-${checkSlot.start}`;
+
+          // Check if Faculty is busy elsewhere
+          if (busySlots.faculty[facId]?.includes(timeKey)) {
+            isBlocked = true;
+            break;
+          }
         }
         if (isBlocked) continue; // Skip this start time entirely
 
         suitableRooms.forEach(room => {
           const roomId = room._id.toString();
-          
+
           // 🛑 ROOM CONFLICT CHECK 🛑
           // Check if Room is busy elsewhere for any part of the block
           let isRoomBlocked = false;
           for (let i = 0; i < blockDuration; i++) {
-              const checkSlot = timeSlots[t + i];
-              const timeKey = `${day}-${checkSlot.start}`;
-              if (busySlots.rooms[roomId]?.includes(timeKey)) {
-                  isRoomBlocked = true;
-                  break;
-              }
+            const checkSlot = timeSlots[t + i];
+            const timeKey = `${day}-${checkSlot.start}`;
+            if (busySlots.rooms[roomId]?.includes(timeKey)) {
+              isRoomBlocked = true;
+              break;
+            }
           }
           if (isRoomBlocked) return; // Skip this room, try next
 
           const varKey = `${subId}|${day}|${t}|${roomId}`;
 
           // --- COST FUNCTION ---
-          let cost = 10; 
+          let cost = 10;
           if (day === 'Monday' || day === 'Friday') cost += 2;
           if (!isLab && timeSlots[t].label === 'morning') cost -= 2;
-          
+
           const waste = room.capacity - batch.strength;
-          if (waste < 0) cost += 50; 
+          if (waste < 0) cost += 50;
           else cost += Math.floor(waste / 10);
 
           const variable = {
@@ -218,7 +229,7 @@ const generateTimetable = async (batch) => {
 
           model.variables[varKey] = variable;
           model.ints[varKey] = 1;
-          
+
           variableMap[varKey] = {
             subject: subject._id,
             faculty: faculty._id,
@@ -240,7 +251,7 @@ const generateTimetable = async (batch) => {
 
   if (!solution.feasible) {
     console.error("❌ Solver failed: Infeasible. This likely means Faculty or Rooms are fully booked by other batches.");
-    return []; 
+    return [];
   }
 
   // 5. PARSE RESULT
@@ -272,11 +283,11 @@ const generateTimetable = async (batch) => {
  */
 const generateMultipleTimetables = async (batch) => {
   const singleResult = await generateTimetable(batch);
-  
+
   return [
     {
       option: 1,
-      name: 'Sequential (Morning to Evening)', 
+      name: 'Sequential (Morning to Evening)',
       description: 'Conflict-free schedule accounting for all other active batches.',
       weekSlots: singleResult
     }
@@ -308,7 +319,7 @@ const validateTimetable = (weekSlots) => {
 };
 
 module.exports = {
-  generateMultipleTimetables, 
-  generateTimetable,          
+  generateMultipleTimetables,
+  generateTimetable,
   validateTimetable,
 };

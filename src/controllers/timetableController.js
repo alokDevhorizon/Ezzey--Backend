@@ -79,6 +79,11 @@ exports.generateTimetable = async (req, res, next) => {
     for (let i = 0; i < timetableOptions.length; i++) {
       const option = timetableOptions[i];
 
+      // Skip invalid/empty generations
+      if (!option.weekSlots || option.weekSlots.length === 0) {
+        continue;
+      }
+
       const validation = validateTimetable(option.weekSlots);
       const timetable = await Timetable.create({
         batch: batchId,
@@ -112,6 +117,13 @@ exports.generateTimetable = async (req, res, next) => {
         suggestions: timetable.suggestions,
         status: timetable.status,
         createdAt: timetable.createdAt,
+      });
+    }
+
+    if (savedTimetables.length === 0) {
+      return res.status(422).json({
+        success: false,
+        message: 'Could not generate a feasible timetable. This is usually due to total requested hours exceeding weekly capacity or resource (Faculty/Room) unavailability.',
       });
     }
 
@@ -288,6 +300,180 @@ exports.generateSuggestionsForTimetable = async (req, res, next) => {
         batchId,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get visual timetable as HTML
+// @route   GET /timetable/visual/:batchId
+// @access  Private
+exports.getVisualTimetable = async (req, res, next) => {
+  try {
+    const timetable = await Timetable.findOne({
+      batch: req.params.batchId,
+      status: { $in: ['active', 'published', 'draft'] },
+    })
+      .populate([
+        { path: 'batch' },
+        { path: 'weekSlots.subject' },
+        { path: 'weekSlots.faculty' },
+        { path: 'weekSlots.classroom' },
+      ])
+      .sort({ createdAt: -1 });
+
+    if (!timetable) {
+      return res.status(404).send('<h1>Timetable not found for this batch</h1>');
+    }
+
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const timeSlots = [
+      '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00'
+    ];
+
+    // Map slots to grid
+    const grid = {};
+    timeSlots.forEach(time => {
+      grid[time] = {};
+      days.forEach(day => {
+        grid[time][day] = null;
+      });
+    });
+
+    timetable.weekSlots.forEach(slot => {
+      if (grid[slot.startTime]) {
+        grid[slot.startTime][slot.day] = slot;
+      }
+    });
+
+    // Generate HTML
+    const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            :root {
+                --bg: #0f0f0f;
+                --card-bg: #1a1a1a;
+                --text: #e0e0e0;
+                --accent: #bb86fc;
+                --border: #333;
+                --lunch: #2d2d2d;
+            }
+            body {
+                background-color: var(--bg);
+                color: var(--text);
+                font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                margin: 0;
+                padding: 40px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+            }
+            .header {
+                width: 100%;
+                max-width: 1200px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+            }
+            .title { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+            table {
+                width: 100%;
+                max-width: 1240px;
+                border-collapse: separate;
+                border-spacing: 0;
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                overflow: hidden;
+                background: var(--card-bg);
+            }
+            th {
+                background: #111;
+                padding: 15px;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+                font-weight: 500;
+                color: #aaa;
+            }
+            td {
+                padding: 15px;
+                border-bottom: 1px solid var(--border);
+                border-right: 1px solid var(--border);
+                vertical-align: top;
+                min-width: 180px;
+            }
+            td:last-child { border-right: none; }
+            tr:last-child td { border-bottom: none; }
+            .time-col { width: 120px; color: #aaa; font-weight: 600; border-right: 2px solid var(--border); }
+            .slot-card { display: flex; flex-direction: column; gap: 4px; }
+            .subject { font-weight: 600; font-size: 14px; color: #fff; }
+            .sub-info { font-size: 12px; color: #888; }
+            .lunch-break {
+                background: var(--lunch);
+                text-align: center;
+                font-weight: bold;
+                letter-spacing: 2px;
+                color: #666;
+                text-transform: uppercase;
+                font-size: 13px;
+                vertical-align: middle;
+            }
+            .empty { color: #444; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="title">🕒 Weekly Timetable (${timetable.batch.name})</div>
+            <div style="color: #666">Code: ${timetable.batch.code}</div>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 120px">Time</th>
+                    ${days.map(d => `<th>${d}</th>`).join('')}
+                </tr>
+            </thead>
+            <tbody>
+                ${timeSlots.map(time => {
+      if (time === '12:00') {
+        return `
+                      <tr>
+                        <td class="time-col">12:00 - 13:00</td>
+                        <td colspan="5" class="lunch-break">LUNCH BREAK</td>
+                      </tr>
+                    `;
+      }
+      const endTime = timeSlots[timeSlots.indexOf(time) + 1] || '17:00';
+      return `
+                    <tr>
+                        <td class="time-col">${time} - ${endTime}</td>
+                        ${days.map(day => {
+        const slot = grid[time][day];
+        if (!slot) return '<td class="empty">—</td>';
+        return `
+                            <td>
+                                <div class="slot-card">
+                                    <span class="subject">${slot.subject.name} (${slot.subject.code})</span>
+                                    <span class="sub-info">${slot.faculty.name}</span>
+                                    <span class="sub-info">${slot.classroom.name} (${slot.classroom.type})</span>
+                                </div>
+                            </td>
+                          `;
+      }).join('')}
+                    </tr>
+                  `;
+    }).join('')}
+            </tbody>
+        </table>
+    </body>
+    </html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
   } catch (error) {
     next(error);
   }

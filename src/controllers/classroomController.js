@@ -23,43 +23,22 @@ exports.createClassroom = async (req, res, next) => {
 exports.bulkUploadClassrooms = async (req, res, next) => {
   try {
     // Check if file is provided
-    if (!req.files || !req.files.file) {
+    if (!req.file) {
       return res.status(400).json({
         success: false,
         message: 'Please upload a file',
       });
     }
 
-    const file = req.files.file;
-    const allowedMimeTypes = [
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-      'text/csv',
-    ];
-
-    // Validate file type
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please upload a valid CSV or Excel file',
-      });
-    }
+    const file = req.file;
+    const fileExtension = path.extname(file.originalname).toLowerCase();
 
     let data = [];
 
-    // Parse Excel/CSV file
-    if (file.mimetype === 'text/csv') {
-      // For CSV files
-      const XLSX_CSV = require('xlsx');
-      const workbook = XLSX_CSV.read(file.data, { type: 'buffer' });
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      data = XLSX_CSV.utils.sheet_to_json(worksheet);
-    } else {
-      // For Excel files
-      const workbook = XLSX.read(file.data, { type: 'buffer' });
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      data = XLSX.utils.sheet_to_json(worksheet);
-    }
+    // Parse Excel/CSV file from buffer
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    data = XLSX.utils.sheet_to_json(worksheet);
 
     if (!data || data.length === 0) {
       return res.status(400).json({
