@@ -83,197 +83,161 @@ const sortSlotsByDayAndTime = (slots) => {
 /**
  * MAIN FUNCTION: Generate Single Optimal Timetable
  */
+/**
+ * MAIN FUNCTION: Generate Single Optimal Timetable (Heuristic / Greedy)
+ * Advantage: Extremely Fast (<100ms)
+ */
 const generateTimetable = async (batch) => {
-  console.log(`🚀 Generating Timetable for: ${batch.name} (Size: ${batch.strength})`);
+  console.log(`🚀 Generating Timetable (Heuristic) for: ${batch.name}`);
 
-  // 1. FETCH RESOURCES & BUSY SLOTS
-  // ---------------------------------------------------------
+  // 1. FETCH RESOURCES
   const busySlots = await getBusySlots();
-
-  // Calculate total hours needed
-  const totalHoursNeeded = batch.subjects.reduce((sum, s) => sum + (s.subject?.hoursPerWeek || 0), 0);
-  const totalAvailableSlots = days.length * timeSlots.length;
-
-  console.log(`🚀 Generating Timetable for: ${batch.name} (Size: ${batch.strength})`);
-  console.log(`📊 Statistics: Subjects: ${batch.subjects.length}, Total Hours: ${totalHoursNeeded}, Max Possible: ${totalAvailableSlots}`);
-
-  if (totalHoursNeeded > totalAvailableSlots) {
-    console.error(`❌ CRITICAL: Total hours requested (${totalHoursNeeded}) exceeds weekly capacity (${totalAvailableSlots})!`);
-    return [];
-  }
-
-  const allClassrooms = await Classroom.find({ isActive: true });
-  allClassrooms.sort((a, b) => b.capacity - a.capacity);
+  const allClassrooms = await Classroom.find({ isActive: true }).sort({ capacity: 1 }); // Ascending for best fit
 
   const lectureRooms = allClassrooms.filter(r => ['lecture', 'seminar'].includes(r.type));
   const labRooms = allClassrooms.filter(r => r.type === 'lab');
 
-  // 2. INITIALIZE SOLVER MODEL
-  // ---------------------------------------------------------
-  const model = {
-    optimize: 'cost',
-    opType: 'min',
-    constraints: {},
-    variables: {},
-    ints: {}
+  // 2. PREPARE & SORT SUBJECTS (Heuristic: Hardest First)
+  // Sort by: Labs first (duration > 1), then Total Hours Descending
+  const sortedSubjects = [...batch.subjects].sort((a, b) => {
+    const durA = (a.subject.type === 'lab' ? a.subject.hoursPerWeek : 1);
+    const durB = (b.subject.type === 'lab' ? b.subject.hoursPerWeek : 1);
+    if (durA !== durB) return durB - durA; // Long blocks first
+    return (b.subject.hoursPerWeek || 0) - (a.subject.hoursPerWeek || 0); // More hours first
+  });
+
+  const resultSlots = [];
+
+  // Track local usage to prevent collisions within this batch
+  const batchBusy = {
+    faculty: new Set(), // "facId-day-time"
+    rooms: new Set(),   // "roomId-day-time"
+    subjectDaily: {}    // "subId-day" -> count
   };
 
-  const variableMap = {};
+  const isSlotBusy = (facId, roomId, day, time) => {
+    const timeKey = `${day}-${time}`;
 
-  // 3. BUILD CONSTRAINTS
-  // ---------------------------------------------------------
-  for (const subjectEntry of batch.subjects) {
+    // Global Checks (Other batches)
+    if (busySlots.faculty[facId]?.includes(timeKey)) return true;
+    if (busySlots.rooms[roomId]?.includes(timeKey)) return true;
+
+    // Local Checks (Current batch generation)
+    if (batchBusy.faculty.has(`${facId}-${timeKey}`)) return true;
+    if (batchBusy.rooms.has(`${roomId}-${timeKey}`)) return true;
+
+    return false;
+  };
+
+  // 3. ASSIGN SLOTS
+  for (const subjectEntry of sortedSubjects) {
     const { subject, faculty } = subjectEntry;
-
     if (!subject || !faculty) continue;
+
+    console.log(`... Processing ${subject.name} (${subject.hoursPerWeek}h)`);
 
     const hoursNeeded = subject.hoursPerWeek || 3;
     const subId = subject._id.toString();
     const facId = faculty._id.toString();
     const isLab = subject.type === 'lab';
     const blockDuration = isLab ? hoursNeeded : 1;
+    let assignedCount = 0;
 
-    // CONSTRAINT: Subject Target Hours
-    model.constraints[`sub_${subId}_target`] = { equal: hoursNeeded };
+    // Try to assign 'hoursNeeded' blocks
+    // For Theory: 'hoursNeeded' separate 1-hour blocks.
+    // For Lab: 1 block of 'hoursNeeded' duration.
+    const iterations = isLab ? 1 : hoursNeeded;
 
-    // ROOM FINDER (With Fallback)
-    const roomPool = isLab ? labRooms : lectureRooms;
-    let suitableRooms = roomPool.filter(r => r.capacity >= batch.strength);
+    for (let i = 0; i < iterations; i++) {
+      let placed = false;
 
-    if (suitableRooms.length === 0) {
-      if (roomPool.length > 0) {
-        console.warn(`⚠️ Warning: No room fits ${batch.strength} students for ${subject.name}. Using largest available.`);
-        suitableRooms = [roomPool[0]];
-      } else {
-        console.error(`❌ CRITICAL: No rooms of type ${subject.type} available!`);
-        continue;
-      }
-    }
+      // Reset day loop for each block to allow spreading
+      // randomize days slightly or start from Monday? Sequential is fine for "Sequential" option.
+      for (const day of days) {
+        if (placed) break;
 
-    days.forEach(day => {
-      // CONSTRAINT: Spread Theory (Max 1 block per day)
-      if (!isLab) {
-        model.constraints[`sub_${subId}_day_${day}`] = { max: 1 };
-      }
-
-      for (let t = 0; t < timeSlots.length; t++) {
-        // Boundary Check
-        if (t + blockDuration > timeSlots.length) continue;
-
-        // Lunch Check (12:00-13:00 gap)
-        if (t <= 2 && (t + blockDuration > 3)) continue;
-
-        // 🛑 GLOBAL CONFLICT CHECK 🛑
-        // We must check EVERY hour in the proposed block for conflicts
-        let isBlocked = false;
-
-        for (let i = 0; i < blockDuration; i++) {
-          const checkSlot = timeSlots[t + i];
-          const timeKey = `${day}-${checkSlot.start}`;
-
-          // Check if Faculty is busy elsewhere
-          if (busySlots.faculty[facId]?.includes(timeKey)) {
-            isBlocked = true;
-            break;
-          }
+        // Constraint: Max 1 theory block per day
+        if (!isLab) {
+          const dayCount = batchBusy.subjectDaily[`${subId}-${day}`] || 0;
+          if (dayCount >= 1) continue;
         }
-        if (isBlocked) continue; // Skip this start time entirely
 
-        suitableRooms.forEach(room => {
-          const roomId = room._id.toString();
+        for (let t = 0; t < timeSlots.length; t++) {
+          // Boundary & Lunch Check
+          if (t + blockDuration > timeSlots.length) break;
+          // Don't span across lunch (assuming index 3 is 12:00-13:00 gap, wait timeSlots has 7 items.
+          // Indices: 0(9), 1(10), 2(11) -- GAP -- 3(13), 4(14), 5(15), 6(16)
+          // If t=2 (11:00) and duration=2 -> Ends 13:00. This crosses lunch?
+          // VisualGap logic: Index 2 ends at 12:00. Index 3 starts at 13:00.
+          // So [11:00-12:00] is contiguous with [13:00-14:00]? NO.
+          // Code must check:
+          if (t <= 2 && (t + blockDuration > 3)) continue; // Crosses 12-1 PM
 
-          // 🛑 ROOM CONFLICT CHECK 🛑
-          // Check if Room is busy elsewhere for any part of the block
-          let isRoomBlocked = false;
-          for (let i = 0; i < blockDuration; i++) {
-            const checkSlot = timeSlots[t + i];
-            const timeKey = `${day}-${checkSlot.start}`;
-            if (busySlots.rooms[roomId]?.includes(timeKey)) {
-              isRoomBlocked = true;
+          // Check Faculty Availability for WHOLE Block
+          let facultyFree = true;
+          for (let k = 0; k < blockDuration; k++) {
+            // We only pass roomId as null here because we haven't picked room yet
+            // We just want to check Faculty busy-ness
+            if (isSlotBusy(facId, 'dummy', day, timeSlots[t + k].start)) {
+              facultyFree = false;
               break;
             }
           }
-          if (isRoomBlocked) return; // Skip this room, try next
+          if (!facultyFree) continue;
 
-          const varKey = `${subId}|${day}|${t}|${roomId}`;
+          // Find a Room
+          const roomPool = isLab ? labRooms : lectureRooms;
+          const bestRoom = roomPool.find(room => {
+            if (room.capacity < batch.strength) return false;
 
-          // --- COST FUNCTION ---
-          let cost = 10;
-          if (day === 'Monday' || day === 'Friday') cost += 2;
-          if (!isLab && timeSlots[t].label === 'morning') cost -= 2;
+            // Check if Room is free for WHOLE block
+            for (let k = 0; k < blockDuration; k++) {
+              if (isSlotBusy(facId, room._id.toString(), day, timeSlots[t + k].start)) {
+                return false;
+              }
+            }
+            return true;
+          });
 
-          const waste = room.capacity - batch.strength;
-          if (waste < 0) cost += 50;
-          else cost += Math.floor(waste / 10);
+          if (bestRoom) {
+            // ALLOCATE
+            placed = true;
+            // Mark Resources Busy
+            for (let k = 0; k < blockDuration; k++) {
+              const slotTime = timeSlots[t + k].start;
+              const slotEndTime = timeSlots[t + k].end;
+              const slotKey = `${day}-${slotTime}`;
 
-          const variable = {
-            cost: cost,
-            [`sub_${subId}_target`]: isLab ? hoursNeeded : 1,
-            [`sub_${subId}_day_${day}`]: 1
-          };
+              batchBusy.faculty.add(`${facId}-${slotKey}`);
+              batchBusy.rooms.add(`${bestRoom._id.toString()}-${slotKey}`);
 
-          // --- HARD CONSTRAINTS FOR BLOCK ---
-          for (let i = 0; i < blockDuration; i++) {
-            const slotIdx = t + i;
-            const timeKey = `${day}_${timeSlots[slotIdx].id}`;
+              // Add to Result
+              resultSlots.push({
+                day,
+                startTime: slotTime,
+                endTime: slotEndTime,
+                subject: subject._id,
+                faculty: faculty._id,
+                classroom: bestRoom._id,
+                type: subject.type
+              });
+            }
 
-            model.constraints[`batch_${batch._id}_${timeKey}`] = { max: 1 };
-            variable[`batch_${batch._id}_${timeKey}`] = 1;
+            // Update Daily Count
+            const dayKey = `${subId}-${day}`;
+            batchBusy.subjectDaily[dayKey] = (batchBusy.subjectDaily[dayKey] || 0) + 1;
 
-            model.constraints[`fac_${facId}_${timeKey}`] = { max: 1 };
-            variable[`fac_${facId}_${timeKey}`] = 1;
-
-            model.constraints[`room_${roomId}_${timeKey}`] = { max: 1 };
-            variable[`room_${roomId}_${timeKey}`] = 1;
+            break; // Move to next iteration (next hour needed)
           }
-
-          model.variables[varKey] = variable;
-          model.ints[varKey] = 1;
-
-          variableMap[varKey] = {
-            subject: subject._id,
-            faculty: faculty._id,
-            classroom: room._id,
-            day,
-            startIndex: t,
-            duration: blockDuration,
-            type: subject.type
-          };
-        });
+        }
       }
-    });
-  }
 
-  // 4. EXECUTE SOLVER
-  // ---------------------------------------------------------
-  console.log(`🧩 Solving constraints with Global Awareness...`);
-  const solution = solver.Solve(model);
-
-  if (!solution.feasible) {
-    console.error("❌ Solver failed: Infeasible. This likely means Faculty or Rooms are fully booked by other batches.");
-    return [];
-  }
-
-  // 5. PARSE RESULT
-  // ---------------------------------------------------------
-  const resultSlots = [];
-  Object.keys(solution).forEach(key => {
-    if (solution[key] > 0.5 && variableMap[key]) {
-      const info = variableMap[key];
-      for (let i = 0; i < info.duration; i++) {
-        const slotIdx = info.startIndex + i;
-        resultSlots.push({
-          day: info.day,
-          startTime: timeSlots[slotIdx].start,
-          endTime: timeSlots[slotIdx].end,
-          subject: info.subject,
-          faculty: info.faculty,
-          classroom: info.classroom,
-          type: info.type
-        });
+      if (!placed) {
+        throw new Error(`Unable to schedule ${subject.name} (${subject.type}). No valid slots/rooms found for duration ${blockDuration}.`);
       }
+      assignedCount++;
     }
-  });
+  }
 
   return sortSlotsByDayAndTime(resultSlots);
 };

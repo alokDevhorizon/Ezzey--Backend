@@ -272,6 +272,139 @@ exports.getTimetableByFaculty = async (req, res, next) => {
 // @desc    Get all timetables
 // @route   GET /timetable
 // @access  Private
+// @desc    Get list of timetables (metadata only, no slots)
+// @route   GET /timetable/list
+// @access  Private
+exports.getTimetableList = async (req, res, next) => {
+  try {
+    const { status, batchId, limit = 10, page = 1 } = req.query;
+    const matchStage = {};
+
+    if (status) {
+      matchStage.status = status;
+    }
+
+    if (batchId) {
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(batchId)) {
+        matchStage.batch = new mongoose.Types.ObjectId(batchId);
+      }
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const pipeline = [
+      // 1. Filter
+      { $match: matchStage },
+
+      // 2. Sort by newest first
+      { $sort: { createdAt: -1 } },
+
+      // 3. Group by Batch + OptionNumber to deduplicate
+      {
+        $group: {
+          _id: {
+            batch: '$batch',
+            optionNumber: '$optionNumber',
+          },
+          doc: { $first: '$$ROOT' },
+        },
+      },
+
+      // 4. Restore document structure
+      { $replaceRoot: { newRoot: '$doc' } },
+
+      // 5. Project away the heavy 'weekSlots' and 'suggestions'
+      {
+        $project: {
+          weekSlots: 0,
+          suggestions: 0,
+        },
+      },
+
+      // 6. Sort again
+      { $sort: { createdAt: -1 } },
+
+      // 7. Facet for Pagination
+      {
+        $facet: {
+          metadata: [{ $count: 'total' }],
+          data: [
+            { $skip: skip },
+            { $limit: Number(limit) },
+            // Populate Batch
+            {
+              $lookup: {
+                from: 'batches',
+                localField: 'batch',
+                foreignField: '_id',
+                as: 'batch',
+              },
+            },
+            {
+              $unwind: {
+                path: '$batch',
+                preserveNullAndEmptyArrays: false,
+              },
+            },
+            // Populate GeneratedBy (User)
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'generatedBy',
+                foreignField: '_id',
+                as: 'generatedBy',
+              },
+            },
+            {
+              $unwind: {
+                path: '$generatedBy',
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $project: {
+                _id: 1,
+                status: 1,
+                createdAt: 1,
+                // Flatten Batch Details
+                degree: '$batch.course', // Now directly mapped
+                course: '$batch.course',
+                department: '$batch.department',
+                semester: '$batch.semester',
+                section: '$batch.name', // "Section" corresponds to batch name (e.g., "A", "Morning Batch")
+                batchCode: '$batch.code',
+                capacity: '$batch.strength',
+                batchId: '$batch._id',
+
+                // Metadata
+                conflictCount: 1,
+                optionNumber: 1,
+                optionName: 1,
+                generatedBy: '$generatedBy.name',
+              },
+            },
+          ],
+        },
+      },
+    ];
+
+    const result = await Timetable.aggregate(pipeline);
+
+    const data = result[0].data;
+    const total = result[0].metadata[0] ? result[0].metadata[0].total : 0;
+
+    res.status(200).json({
+      success: true,
+      count: data.length,
+      total,
+      data: data,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Get all timetables
 // @route   GET /timetable
 // @access  Private

@@ -7,6 +7,11 @@ const batchSchema = new mongoose.Schema(
       required: [true, 'Please provide a batch name'],
       trim: true,
     },
+    course: {
+      type: String,
+      required: [true, 'Please provide a course/degree (e.g., B.Tech, BCA)'],
+      trim: true,
+    },
     code: {
       type: String,
       required: [true, 'Please provide a batch code'],
