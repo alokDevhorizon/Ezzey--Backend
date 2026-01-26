@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Classroom = require('../models/Classroom');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { generateVerificationToken, sendVerificationEmail, sendPasswordResetEmail } = require('../services/emailService');
@@ -53,6 +54,9 @@ exports.register = async (req, res, next) => {
       });
     }
 
+    // Check if any classroom exists (system setup check)
+    const classroomExists = await Classroom.findOne();
+
     res.status(201).json({
       success: true,
       message: 'User registered successfully. Please check your email to verify your account.',
@@ -62,6 +66,7 @@ exports.register = async (req, res, next) => {
         email: user.email,
         role: user.role,
         isEmailVerified: user.isEmailVerified,
+        isNewUser: !classroomExists,
       },
     });
   } catch (error) {
@@ -121,6 +126,9 @@ exports.login = async (req, res, next) => {
 
     console.log('✅ User logged in and cookie set:', user.email);
 
+    // Check if any classroom exists
+    const classroomExists = await Classroom.findOne();
+
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -129,6 +137,7 @@ exports.login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        isNewUser: !classroomExists,
       },
     });
   } catch (error) {
@@ -143,6 +152,9 @@ exports.getProfile = async (req, res, next) => {
   try {
     const user = await User.findById(req.user.id);
 
+    // Check if any classroom exists
+    const classroomExists = await Classroom.findOne();
+
     res.status(200).json({
       success: true,
       user: {
@@ -150,6 +162,7 @@ exports.getProfile = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        isNewUser: !classroomExists,
         createdAt: user.createdAt,
       },
     });
@@ -216,6 +229,9 @@ exports.verifyEmail = async (req, res, next) => {
 
     console.log('✅ Email verified for user:', user.email);
 
+    // Check if any classroom exists
+    const classroomExists = await Classroom.findOne();
+
     res.status(200).json({
       success: true,
       message: 'Email verified successfully! You can now log in.',
@@ -225,6 +241,7 @@ exports.verifyEmail = async (req, res, next) => {
         email: user.email,
         role: user.role,
         isEmailVerified: user.isEmailVerified,
+        isNewUser: !classroomExists,
       },
     });
   } catch (error) {
