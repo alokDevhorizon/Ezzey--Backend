@@ -7,6 +7,19 @@ const subjectSchema = new mongoose.Schema(
       required: [true, 'Please provide a subject name'],
       trim: true,
     },
+    course: {
+      type: String,
+      trim: true,
+    },
+    semester: {
+      type: Number,
+      min: 1,
+      max: 8,
+    },
+    section: {
+      type: String,
+      trim: true,
+    },
     code: {
       type: String,
       required: [true, 'Please provide a subject code'],

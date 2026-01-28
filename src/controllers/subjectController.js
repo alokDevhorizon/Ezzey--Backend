@@ -9,6 +9,29 @@ const csv = require('csv-parser');
 // @access  Private/Admin
 exports.createSubject = async (req, res, next) => {
   try {
+    const { course, semester, section } = req.body;
+
+    if (!course || String(course).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Course is required',
+      });
+    }
+
+    if (semester === undefined || semester === null || String(semester).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Semester is required',
+      });
+    }
+
+    if (!section || String(section).trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Section is required',
+      });
+    }
+
     const subject = await Subject.create(req.body);
     res.status(201).json({
       success: true,
@@ -153,6 +176,9 @@ exports.uploadSubjects = async (req, res, next) => {
       if (
         !sanitizedRow.code ||
         !sanitizedRow.name ||
+        !sanitizedRow.course ||
+        sanitizedRow.semester === null ||
+        !sanitizedRow.section ||
         !sanitizedRow.department ||
         sanitizedRow.hoursPerWeek === null
       ) {
@@ -170,6 +196,9 @@ exports.uploadSubjects = async (req, res, next) => {
       subjectsToInsert.push({
         code: sanitizedRow.code.toUpperCase(),
         name: sanitizedRow.name,
+        course: sanitizedRow.course,
+        semester: sanitizedRow.semester,
+        section: sanitizedRow.section,
         department: sanitizedRow.department,
         hoursPerWeek: sanitizedRow.hoursPerWeek,
         type: sanitizedRow.type || 'theory',
@@ -272,8 +301,13 @@ function sanitizeRow(row) {
   // Trim string fields
   sanitized.code = row.code ? String(row.code).trim() : null;
   sanitized.name = row.name ? String(row.name).trim() : null;
+  sanitized.course = row.course ? String(row.course).trim() : null;
+  sanitized.section = row.section ? String(row.section).trim() : null;
   sanitized.department = row.department ? String(row.department).trim() : null;
   sanitized.type = row.type ? String(row.type).trim().toLowerCase() : 'theory';
+
+  const semesterValue = parseInt(row.semester, 10);
+  sanitized.semester = isNaN(semesterValue) ? null : semesterValue;
 
   // Parse numeric field
   const hoursValue = parseFloat(row.hoursPerWeek);
